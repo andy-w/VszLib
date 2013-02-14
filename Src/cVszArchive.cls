@@ -66,6 +66,7 @@ Private Declare Function FileTimeToSystemTime Lib "kernel32" (lpFileTime As FILE
 Private Declare Function SystemTimeToFileTime Lib "kernel32" (lpSystemTime As SYSTEMTIME, lpFileTime As FILETIME) As Long
 Private Declare Function LocalFileTimeToFileTime Lib "kernel32" (lpLocalFileTime As FILETIME, lpFileTime As Any) As Long
 Private Declare Function FindFirstFile Lib "kernel32" Alias "FindFirstFileA" (ByVal lpFileName As String, lpFindFileData As WIN32_FIND_DATA) As Long
+Private Declare Function FindNextFile Lib "kernel32.dll" Alias "FindNextFileA" (ByVal hFindFile As Long, lpFindFileData As WIN32_FIND_DATA) As Long
 Private Declare Function FindClose Lib "kernel32" (ByVal hFindFile As Long) As Long
 Private Declare Function CallWindowProc Lib "user32" Alias "CallWindowProcA" (ByVal lpPrevWndFunc As Long, ByVal hWnd As Long, ByVal Msg As Long, ByVal wParam As Long, ByVal lParam As Long) As Long
 Private Declare Function LoadLibrary Lib "kernel32" Alias "LoadLibraryA" (ByVal lpLibFileName As String) As Long
@@ -358,14 +359,18 @@ Public Function Init(Optional DllFile As String) As Boolean
         m_hLibrary = LoadLibrary(DllFile)
     Else
         '--- auto load: 1. 7z.dll from app path, 2. 7z.dll from setup location, 3. 7za.dll from app path
+Call MsgBox(App.Path & "\7z.dll")
         m_hLibrary = LoadLibrary(App.Path & "\7z.dll")
         If m_hLibrary = 0 Then
             sPath = pvRegRead("SOFTWARE\7-Zip", "Path")
             If LenB(sPath) <> 0 Then
+Call MsgBox(sPath & "\7z.dll")
                 m_hLibrary = LoadLibrary(sPath & "\7z.dll")
+                MsgBox (Err.LastDllError)
             End If
         End If
         If m_hLibrary = 0 Then
+Call MsgBox(App.Path & "\7za.dll")
             m_hLibrary = LoadLibrary(App.Path & "\7za.dll")
         End If
     End If
@@ -545,28 +550,88 @@ Public Function AddFile( _
     End If
     hFind = FindFirstFile(File, uData)
     If hFind <> INVALID_HANDLE_VALUE Then
-        Call FindClose(hFind)
+        
         Call CopyMemory(cSize, uData.nFileSizeLow, 4)
         Call CopyMemory(ByVal VarPtr(cSize) + 4, uData.nFileSizeHigh, 4)
+
+        With m_uFiles(m_lCount)
+            If LenB(Name) <> 0 Then
+                .FileName = Name
+            Else
+                .FileName = Mid$(File, InStrRev(File, "\") + 1)
+            End If
+            .Size = cSize * 10000@
+            .Attributes = uData.dwFileAttributes
+            .Comment = Comment
+            .CreationTime = pvToDate(uData.ftCreationTime)
+            .LastAccessTime = pvToDate(uData.ftLastAccessTime)
+            .LastWriteTime = pvToDate(uData.ftLastWriteTime)
+            .SourceFileName = File
+            If m_lCount > 0 Then
+                .Offset = m_uFiles(m_lCount - 1).Offset + m_uFiles(m_lCount - 1).Size
+            End If
+        End With
+        m_lCount = m_lCount + 1
+        
+        Call FindClose(hFind)
+   
+        AddFile = True
+        
     End If
-    With m_uFiles(m_lCount)
-        If LenB(Name) <> 0 Then
-            .FileName = Name
-        Else
-            .FileName = Mid$(File, InStrRev(File, "\") + 1)
-        End If
-        .Size = cSize * 10000@
-        .Attributes = uData.dwFileAttributes
-        .Comment = Comment
-        .CreationTime = pvToDate(uData.ftCreationTime)
-        .LastAccessTime = pvToDate(uData.ftLastAccessTime)
-        .LastWriteTime = pvToDate(uData.ftLastWriteTime)
-        .SourceFileName = File
-        If m_lCount > 0 Then
-            .Offset = m_uFiles(m_lCount - 1).Offset + m_uFiles(m_lCount - 1).Size
-        End If
-    End With
-    m_lCount = m_lCount + 1
+    
+    Exit Function
+EH:
+    If PrintError(FUNC_NAME, True) Then
+        Resume Next
+    End If
+End Function
+
+Public Function AddFiles( _
+            File As String, _
+            Optional Comment As String) As Boolean
+    Const FUNC_NAME     As String = "AddFile"
+    Dim hFind           As Long
+    Dim uData           As WIN32_FIND_DATA
+    Dim cSize           As Currency
+
+    On Error GoTo EH
+    If m_lCount = 0 Then
+        ReDim m_uFiles(0 To 2)
+    ElseIf m_lCount > UBound(m_uFiles) Then
+        ReDim Preserve m_uFiles(0 To 2 * UBound(m_uFiles))
+    End If
+    hFind = FindFirstFile(File, uData)
+    If hFind <> INVALID_HANDLE_VALUE Then
+        
+        Do
+        
+            Call CopyMemory(cSize, uData.nFileSizeLow, 4)
+            Call CopyMemory(ByVal VarPtr(cSize) + 4, uData.nFileSizeHigh, 4)
+    
+            With m_uFiles(m_lCount)
+                '.FileName = Mid$(uData.cFileName, InStrRev(File, "\") + 1)
+                .FileName = uData.cFileName
+                .Size = cSize * 10000@
+                .Attributes = uData.dwFileAttributes
+                .Comment = Comment
+                .CreationTime = pvToDate(uData.ftCreationTime)
+                .LastAccessTime = pvToDate(uData.ftLastAccessTime)
+                .LastWriteTime = pvToDate(uData.ftLastWriteTime)
+                .SourceFileName = File
+                If m_lCount > 0 Then
+                    .Offset = m_uFiles(m_lCount - 1).Offset + m_uFiles(m_lCount - 1).Size
+                End If
+            End With
+            m_lCount = m_lCount + 1
+        
+        Loop While (FindNextFile(hFind, uData) <> 0)
+        
+        Call FindClose(hFind)
+   
+        AddFiles = True
+        
+    End If
+    
     Exit Function
 EH:
     If PrintError(FUNC_NAME, True) Then
